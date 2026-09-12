@@ -12,7 +12,7 @@ PROFILE_PATH=APP_DIR/'profile.json'
 TEMPLATE_DIR=APP_DIR/'templates'/'user'; TEMPLATE_DIR.mkdir(parents=True,exist_ok=True)
 ITEMS=[('eventos','Eventos','position'),('buscar','Buscar','image'),('botao_atacar','Atacar','image'),('botao_marchar','Marchar','image')]
 EXAMPLES={'buscar':'templates/buscar.png','botao_atacar':'templates/botao_atacar.png','botao_marchar':'templates/botao_marchar.png'}
-DEFAULT={'threshold':.72,'click_delay':.3,'after_eventos':.7,'after_search':.5,'after_attack':.7,'after_march':.7,'timeout':5.0,'actions':{}}
+DEFAULT={'threshold':.72,'click_delay':.3,'after_eventos':.7,'after_search':.5,'after_attack':.7,'after_march':.7,'after_esc':1.2,'retry_wait':3.0,'timeout':5.0,'actions':{}}
 def load_profile():
  d=json.loads(json.dumps(DEFAULT))
  if PROFILE_PATH.exists():
@@ -79,7 +79,7 @@ class Calibration(tk.Toplevel):
  def close(self):save_profile(self.app.p);self.app.summary();self.destroy()
 class App(tk.Tk):
  def __init__(self):
-  super().__init__();self.title('Zumbi Product V1.4 Final');self.geometry('820x580');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
+  super().__init__();self.title('Zumbi Product V1.5 Final');self.geometry('820x580');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
  def build(self):
   r=ttk.Frame(self,padding=18);r.pack(fill='both',expand=True);ttk.Label(r,text='ZUMBI',font=('Segoe UI',24,'bold')).pack(anchor='w');self.status=ttk.Label(r,text='Parado');self.status.pack(anchor='w',pady=(0,14));b=ttk.Frame(r);b.pack(fill='x');ttk.Button(b,text='Iniciar',command=self.start_bot).pack(side='left',padx=3);ttk.Button(b,text='Pausar / Retomar',command=self.pause).pack(side='left',padx=3);ttk.Button(b,text='Parar',command=self.stop).pack(side='left',padx=3);ttk.Button(b,text='Calibrar',command=self.calibrate).pack(side='right');ttk.Separator(r).pack(fill='x',pady=12);self.sum=ttk.Frame(r);self.sum.pack(fill='x');self.summary();ttk.Label(r,text='Log',font=('Segoe UI',14,'bold')).pack(anchor='w',pady=(18,6));self.logbox=tk.Text(r,height=15,state='disabled',font=('Consolas',9));self.logbox.pack(fill='both',expand=True);ttk.Label(r,text='F8 pausa/retoma | F12 para').pack(anchor='e')
  def configured(self,n,k):
@@ -126,6 +126,8 @@ class App(tk.Tk):
    time.sleep(.05)
  def click_xy(self,pos,l):self.log(f"CLICK {l}: {pos['x']},{pos['y']}");pyautogui.click(pos['x'],pos['y']);self.sleep(float(self.p['click_delay']))
  def click(self,f,l):self.click_xy(f,l)
+ def press_esc_retry(self,reason):
+  self.log(reason+' ESC e novo ciclo.');pyautogui.press('esc');self.sleep(float(self.p.get('after_esc',1.2)));self.sleep(float(self.p.get('retry_wait',3.0)))
  def wait(self,n):
   end=time.time()+float(self.p['timeout']);a=self.p['actions'][n]
   while self.running and time.time()<end:
@@ -144,13 +146,15 @@ class App(tk.Tk):
    while self.running:
     self.click_xy(self.p['actions']['eventos']['position'],'Eventos');self.sleep(float(self.p['after_eventos']))
     f=self.wait('buscar')
-    if not f:self.log('Buscar nao encontrado.');break
+    if not f:self.press_esc_retry('Buscar nao encontrado.');continue
     self.click(f,'Buscar');self.sleep(float(self.p['after_search']))
     f=self.wait('botao_atacar')
-    if not f:self.log('Atacar nao encontrado. Possivel falta de vigor. Encerrando.');break
+    if not f:
+     self.press_esc_retry('Atacar nao encontrado; tropas podem estar ocupadas.');continue
     self.click(f,'Atacar');self.sleep(float(self.p['after_attack']))
     f=self.wait('botao_marchar')
-    if not f:self.log('Marchar nao encontrado.');break
+    if not f:
+     self.press_esc_retry('Marchar nao encontrado; tentando novamente.');continue
     self.click(f,'Marchar');marches+=1;self.log(f'Marcha {marches} concluida');self.sleep(float(self.p['after_march']))
   except pyautogui.FailSafeException:self.log('FAILSAFE acionado.')
   except Exception as e:self.log('ERRO: '+str(e))
