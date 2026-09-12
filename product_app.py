@@ -1,415 +1,154 @@
 from __future__ import annotations
-
-import json
-import queue
-import threading
-import time
+import json, queue, threading, time
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
-
-import cv2
-import mss
-import numpy as np
-import pyautogui
+import cv2, mss, numpy as np, pyautogui
 from pynput import keyboard
+from PIL import Image, ImageTk
 
-APP_DIR = Path(__file__).resolve().parent
-PROFILE_PATH = APP_DIR / "profile.json"
-TEMPLATE_DIR = APP_DIR / "templates" / "user"
-TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
-
-STEPS = [
-    ("eventos", "Eventos", "position"),
-    ("buscar", "Buscar", "image"),
-    ("popup_invasao", "Popup de invasao", "image"),
-    ("botao_atacar", "Atacar", "image"),
-    ("botao_marchar", "Marchar", "image"),
-]
-
-DEFAULT_PROFILE = {
-    "threshold": 0.72,
-    "click_delay": 0.30,
-    "after_search": 0.50,
-    "after_attack": 0.70,
-    "after_march": 0.70,
-    "timeout": 5.0,
-    "actions": {},
-}
-
-
+APP_DIR=Path(__file__).resolve().parent
+PROFILE_PATH=APP_DIR/'profile.json'
+TEMPLATE_DIR=APP_DIR/'templates'/'user'; TEMPLATE_DIR.mkdir(parents=True,exist_ok=True)
+ITEMS=[('tela_invasao','Tela / aba Invasao Zumbi','precondition'),('buscar','Buscar','action'),('popup_invasao','Popup / alvo encontrado','state'),('botao_atacar','Atacar','action'),('botao_marchar','Marchar','action'),('sem_vigor','Sem vigor','state')]
+DEFAULT={'threshold':.72,'click_delay':.3,'after_search':.5,'after_attack':.7,'after_march':.7,'timeout':5.0,'actions':{}}
 def load_profile():
-    if not PROFILE_PATH.exists():
-        return json.loads(json.dumps(DEFAULT_PROFILE))
-    try:
-        data = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
-        merged = json.loads(json.dumps(DEFAULT_PROFILE))
-        merged.update(data)
-        merged.setdefault("actions", {})
-        return merged
-    except Exception:
-        return json.loads(json.dumps(DEFAULT_PROFILE))
-
-
-def save_profile(profile):
-    PROFILE_PATH.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def full_screenshot():
-    with mss.mss() as sct:
-        mon = sct.monitors[1]
-        shot = np.array(sct.grab(mon))
-    return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR), mon
-
-
-def best_match(template_path: str, threshold: float):
-    path = Path(template_path)
-    if not path.is_absolute():
-        path = APP_DIR / path
-    template = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if template is None:
-        return None
-    screen, mon = full_screenshot()
-    th, tw = template.shape[:2]
-    sh, sw = screen.shape[:2]
-    if tw > sw or th > sh:
-        return None
-    result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
-    _, score, _, loc = cv2.minMaxLoc(result)
-    if score < threshold:
-        return None
-    return {
-        "x": int(mon["left"] + loc[0] + tw // 2),
-        "y": int(mon["top"] + loc[1] + th // 2),
-        "score": float(score),
-    }
-
-
-def find_action(action, threshold):
-    best = None
-    for path in action.get("templates", []):
-        found = best_match(path, threshold)
-        if found and (best is None or found["score"] > best["score"]):
-            best = found
-    return best
-
-
-class CaptureOverlay(tk.Toplevel):
-    def __init__(self, parent, title, callback):
-        super().__init__(parent)
-        self.callback = callback
-        self.attributes("-fullscreen", True)
-        self.attributes("-topmost", True)
-        self.attributes("-alpha", 0.22)
-        self.configure(bg="black", cursor="crosshair")
-        self.label = tk.Label(self, text=f"{title}\nClique no centro do elemento | ESC cancela", bg="black", fg="white", font=("Segoe UI", 22, "bold"))
-        self.label.pack(pady=35)
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.bind("<Button-1>", self._click)
-
-    def _click(self, event):
-        x, y = self.winfo_pointerxy()
-        self.destroy()
-        self.after(120, lambda: self.callback(x, y))
-
-
-class CropOverlay(tk.Toplevel):
-    def __init__(self, parent, name, center_x, center_y, callback):
-        super().__init__(parent)
-        self.name = name
-        self.callback = callback
-        self.screen, self.mon = full_screenshot()
-        self.attributes("-fullscreen", True)
-        self.attributes("-topmost", True)
-        self.configure(cursor="crosshair")
-        self.canvas = tk.Canvas(self, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        rgb = cv2.cvtColor(self.screen, cv2.COLOR_BGR2RGB)
-        try:
-            from PIL import Image, ImageTk
-            self.photo = ImageTk.PhotoImage(Image.fromarray(rgb))
-            self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
-        except Exception:
-            self.destroy()
-            messagebox.showerror("Zumbi", "Pillow e necessario para o recorte visual. Rode: pip install Pillow")
-            return
-        self.start = None
-        self.rect = None
-        self.canvas.create_text(20, 25, anchor="nw", text="Arraste um retangulo ao redor do elemento. ENTER salva | ESC cancela", fill="white", font=("Segoe UI", 18, "bold"))
-        local_x = center_x - self.mon["left"]
-        local_y = center_y - self.mon["top"]
-        self.canvas.create_line(local_x - 18, local_y, local_x + 18, local_y, fill="red", width=2)
-        self.canvas.create_line(local_x, local_y - 18, local_x, local_y + 18, fill="red", width=2)
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.bind("<Return>", self._save)
-        self.canvas.bind("<ButtonPress-1>", self._start)
-        self.canvas.bind("<B1-Motion>", self._drag)
-        self.canvas.bind("<ButtonRelease-1>", self._end)
-
-    def _start(self, event):
-        self.start = (event.x, event.y)
-        if self.rect:
-            self.canvas.delete(self.rect)
-        self.rect = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="red", width=3)
-
-    def _drag(self, event):
-        if self.start and self.rect:
-            self.canvas.coords(self.rect, self.start[0], self.start[1], event.x, event.y)
-
-    def _end(self, event):
-        self.end = (event.x, event.y)
-
-    def _save(self, _event=None):
-        if not self.start or not hasattr(self, "end"):
-            return
-        x1, x2 = sorted((self.start[0], self.end[0]))
-        y1, y2 = sorted((self.start[1], self.end[1]))
-        if x2 - x1 < 8 or y2 - y1 < 8:
-            return
-        crop = self.screen[y1:y2, x1:x2]
-        existing = list(TEMPLATE_DIR.glob(f"{self.name}_*.png"))
-        path = TEMPLATE_DIR / f"{self.name}_{len(existing)+1:03d}.png"
-        cv2.imwrite(str(path), crop)
-        rel = str(path.relative_to(APP_DIR)).replace("\\", "/")
-        self.destroy()
-        self.callback(rel)
-
-
-class ZumbiApp(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Zumbi")
-        self.geometry("780x620")
-        self.minsize(720, 560)
-        self.profile = load_profile()
-        self.running = False
-        self.paused = False
-        self.worker = None
-        self.logs = queue.Queue()
-        self.protocol("WM_DELETE_WINDOW", self.close)
-        self._build()
-        self.after(100, self._flush_logs)
-        self.listener = keyboard.Listener(on_press=self._hotkey)
-        self.listener.start()
-
-    def _build(self):
-        root = ttk.Frame(self, padding=18)
-        root.pack(fill="both", expand=True)
-        ttk.Label(root, text="ZUMBI", font=("Segoe UI", 24, "bold")).pack(anchor="w")
-        self.status = ttk.Label(root, text="Parado", font=("Segoe UI", 11))
-        self.status.pack(anchor="w", pady=(0, 14))
-        bar = ttk.Frame(root)
-        bar.pack(fill="x", pady=(0, 12))
-        ttk.Button(bar, text="Iniciar", command=self.start_bot).pack(side="left", padx=(0, 8))
-        ttk.Button(bar, text="Pausar / Retomar", command=self.toggle_pause).pack(side="left", padx=(0, 8))
-        ttk.Button(bar, text="Parar", command=self.stop_bot).pack(side="left", padx=(0, 8))
-        ttk.Button(bar, text="Configurar", command=self.configure_wizard).pack(side="right")
-        ttk.Separator(root).pack(fill="x", pady=8)
-        ttk.Label(root, text="Configuracao", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(4, 8))
-        self.actions_frame = ttk.Frame(root)
-        self.actions_frame.pack(fill="x")
-        self._refresh_actions()
-        ttk.Label(root, text="Log", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(18, 6))
-        self.logbox = tk.Text(root, height=14, state="disabled", font=("Consolas", 9))
-        self.logbox.pack(fill="both", expand=True)
-        ttk.Label(root, text="F8 pausa/retoma | F12 para", font=("Segoe UI", 9)).pack(anchor="e", pady=(6, 0))
-
-    def _refresh_actions(self):
-        for child in self.actions_frame.winfo_children():
-            child.destroy()
-        for name, label, mode in STEPS:
-            action = self.profile["actions"].get(name, {})
-            pos = action.get("position")
-            templates = len(action.get("templates", []))
-            status = "nao configurado"
-            if pos:
-                status = f"X {pos['x']} / Y {pos['y']}"
-            if templates:
-                status += f" | {templates} imagem(ns)"
-            row = ttk.Frame(self.actions_frame)
-            row.pack(fill="x", pady=3)
-            ttk.Label(row, text=label, width=20).pack(side="left")
-            ttk.Label(row, text=status).pack(side="left")
-            ttk.Button(row, text="Capturar", command=lambda n=name, l=label, m=mode: self.capture_step(n, l, m)).pack(side="right")
-
-    def log(self, text):
-        self.logs.put(text)
-
-    def _flush_logs(self):
-        while not self.logs.empty():
-            text = self.logs.get_nowait()
-            self.logbox.configure(state="normal")
-            self.logbox.insert("end", text + "\n")
-            self.logbox.see("end")
-            self.logbox.configure(state="disabled")
-        self.after(100, self._flush_logs)
-
-    def configure_wizard(self):
-        if self.running:
-            messagebox.showwarning("Zumbi", "Pare o bot antes de configurar.")
-            return
-        self._wizard_index = 0
-        self._wizard_next()
-
-    def _wizard_next(self):
-        if self._wizard_index >= len(STEPS):
-            save_profile(self.profile)
-            self._refresh_actions()
-            messagebox.showinfo("Zumbi", "Configuracao concluida e salva.")
-            return
-        name, label, mode = STEPS[self._wizard_index]
-        self.capture_step(name, label, mode, wizard=True)
-
-    def capture_step(self, name, label, mode, wizard=False):
-        self.withdraw()
-        def got_position(x, y):
-            self.deiconify()
-            self.lift()
-            action = self.profile["actions"].setdefault(name, {"mode": mode, "templates": []})
-            action["mode"] = mode
-            action["position"] = {"x": x, "y": y}
-            save_profile(self.profile)
-            if mode == "position":
-                self._capture_done(wizard)
-                return
-            if messagebox.askyesno("Zumbi", f"Posicao de {label} salva.\nDeseja capturar/ajustar a imagem agora?"):
-                self.withdraw()
-                def got_template(path):
-                    self.deiconify()
-                    self.lift()
-                    action["templates"] = action.get("templates", []) + [path]
-                    save_profile(self.profile)
-                    found = best_match(path, float(self.profile.get("threshold", 0.72)))
-                    if found:
-                        messagebox.showinfo("Teste", f"Imagem salva. Match atual: {found['score']:.1%}")
-                    else:
-                        messagebox.showwarning("Teste", "Imagem salva, mas nao atingiu o threshold no teste atual.")
-                    self._capture_done(wizard)
-                CropOverlay(self, name, x, y, got_template)
-            else:
-                self._capture_done(wizard)
-        CaptureOverlay(self, f"Configure: {label}", got_position)
-
-    def _capture_done(self, wizard):
-        self._refresh_actions()
-        if wizard:
-            self._wizard_index += 1
-            self.after(250, self._wizard_next)
-
-    def _hotkey(self, key):
-        if key == keyboard.Key.f8:
-            self.after(0, self.toggle_pause)
-        elif key == keyboard.Key.f12:
-            self.after(0, self.stop_bot)
-
-    def toggle_pause(self):
-        if not self.running:
-            return
-        self.paused = not self.paused
-        self.status.configure(text="Pausado" if self.paused else "Rodando")
-        self.log("PAUSADO" if self.paused else "RETOMADO")
-
-    def stop_bot(self):
-        self.running = False
-        self.paused = False
-        self.status.configure(text="Parando...")
-
-    def start_bot(self):
-        required = ["eventos", "buscar", "popup_invasao", "botao_atacar", "botao_marchar"]
-        missing = [x for x in required if x not in self.profile.get("actions", {})]
-        if missing:
-            messagebox.showwarning("Zumbi", "Configure primeiro: " + ", ".join(missing))
-            return
-        if self.running:
-            return
-        self.running = True
-        self.paused = False
-        self.status.configure(text="Rodando")
-        self.worker = threading.Thread(target=self._bot_loop, daemon=True)
-        self.worker.start()
-
-    def _sleep(self, seconds):
-        end = time.time() + seconds
-        while self.running and time.time() < end:
-            while self.paused and self.running:
-                time.sleep(0.1)
-            time.sleep(0.05)
-
-    def _click(self, x, y, label):
-        self.log(f"CLICK {label}: {x}, {y}")
-        pyautogui.click(x, y)
-        self._sleep(float(self.profile.get("click_delay", 0.30)))
-
-    def _wait_image(self, name):
-        action = self.profile["actions"][name]
-        deadline = time.time() + float(self.profile.get("timeout", 5.0))
-        while self.running and time.time() < deadline:
-            if self.paused:
-                time.sleep(0.1)
-                continue
-            found = find_action(action, float(self.profile.get("threshold", 0.72)))
-            if found:
-                self.log(f"{name}: match {found['score']:.3f}")
-                return found
-            time.sleep(0.25)
-        return None
-
-    def _bot_loop(self):
-        attacks = 0
-        try:
-            while self.running:
-                while self.paused and self.running:
-                    time.sleep(0.1)
-                eventos = self.profile["actions"]["eventos"]["position"]
-                self._click(eventos["x"], eventos["y"], "Eventos")
-                buscar = self._wait_image("buscar")
-                if not buscar:
-                    self.log("Buscar nao encontrado. Reiniciando ciclo.")
-                    pyautogui.press("esc")
-                    continue
-                self._click(buscar["x"], buscar["y"], "Buscar")
-                self._sleep(float(self.profile.get("after_search", 0.50)))
-                popup = self._wait_image("popup_invasao")
-                if not popup:
-                    self.log("Popup nao encontrado. Reiniciando ciclo.")
-                    pyautogui.press("esc")
-                    continue
-                atacar = self._wait_image("botao_atacar")
-                if not atacar:
-                    self.log("Atacar nao encontrado. Reiniciando ciclo.")
-                    pyautogui.press("esc")
-                    continue
-                self._click(atacar["x"], atacar["y"], "Atacar")
-                self._sleep(float(self.profile.get("after_attack", 0.70)))
-                marchar = self._wait_image("botao_marchar")
-                if not marchar:
-                    self.log("Marchar nao encontrado. Possivel falta de vigor ou tela inesperada. Parando com seguranca.")
-                    self.running = False
-                    break
-                self._click(marchar["x"], marchar["y"], "Marchar")
-                attacks += 1
-                self.log(f"Ciclo concluido. Marchas: {attacks}")
-                self._sleep(float(self.profile.get("after_march", 0.70)))
-        except pyautogui.FailSafeException:
-            self.log("FAILSAFE acionado: mouse no canto da tela. Bot parado.")
-        except Exception as exc:
-            self.log(f"ERRO: {exc}")
-        finally:
-            self.running = False
-            self.paused = False
-            self.after(0, lambda: self.status.configure(text="Parado"))
-            self.log(f"Finalizado. Marchas realizadas: {attacks}")
-
-    def close(self):
-        self.running = False
-        try:
-            self.listener.stop()
-        except Exception:
-            pass
-        self.destroy()
-
-
-if __name__ == "__main__":
-    pyautogui.FAILSAFE = True
-    app = ZumbiApp()
-    app.mainloop()
+ d=json.loads(json.dumps(DEFAULT))
+ if PROFILE_PATH.exists():
+  try:d.update(json.loads(PROFILE_PATH.read_text(encoding='utf-8')));d.setdefault('actions',{})
+  except:pass
+ return d
+def save_profile(p):PROFILE_PATH.write_text(json.dumps(p,indent=2,ensure_ascii=False),encoding='utf-8')
+def shot():
+ with mss.mss() as s:
+  m=s.monitors[1]; im=np.array(s.grab(m))
+ return cv2.cvtColor(im,cv2.COLOR_BGRA2BGR),m
+def match(path,threshold):
+ p=Path(path);p=p if p.is_absolute() else APP_DIR/p;t=cv2.imread(str(p))
+ if t is None:return None
+ s,m=shot();th,tw=t.shape[:2]
+ if tw>s.shape[1] or th>s.shape[0]:return None
+ r=cv2.matchTemplate(s,t,cv2.TM_CCOEFF_NORMED);_,score,_,loc=cv2.minMaxLoc(r)
+ if score<threshold:return None
+ return {'x':int(m['left']+loc[0]+tw//2),'y':int(m['top']+loc[1]+th//2),'score':float(score)}
+def find(a,t):
+ best=None
+ for p in a.get('templates',[]):
+  f=match(p,t)
+  if f and (best is None or f['score']>best['score']):best=f
+ return best
+class Pointer(tk.Toplevel):
+ def __init__(self,parent,label,cb):
+  super().__init__(parent);self.cb=cb;self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.attributes('-alpha',.22);self.configure(bg='black',cursor='crosshair')
+  tk.Label(self,text=f'{label}\nClique no centro | ESC cancela',bg='black',fg='white',font=('Segoe UI',22,'bold')).pack(pady=35);self.bind('<Escape>',lambda e:self.destroy());self.bind('<Button-1>',self.go)
+ def go(self,e):
+  x,y=self.winfo_pointerxy();self.destroy();self.after(120,lambda:self.cb(x,y))
+class Crop(tk.Toplevel):
+ def __init__(self,parent,name,x,y,cb):
+  super().__init__(parent);self.name=name;self.cb=cb;self.im,self.mon=shot();self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.configure(cursor='crosshair');self.c=tk.Canvas(self,highlightthickness=0);self.c.pack(fill='both',expand=True)
+  self.photo=ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(self.im,cv2.COLOR_BGR2RGB)));self.c.create_image(0,0,anchor='nw',image=self.photo);self.c.create_text(20,25,anchor='nw',text='Arraste ao redor do elemento. ENTER salva | ESC cancela',fill='white',font=('Segoe UI',18,'bold'))
+  lx,ly=x-self.mon['left'],y-self.mon['top'];self.c.create_line(lx-18,ly,lx+18,ly,fill='red',width=2);self.c.create_line(lx,ly-18,lx,ly+18,fill='red',width=2);self.a=self.b=self.rect=None
+  self.bind('<Escape>',lambda e:self.destroy());self.bind('<Return>',self.save);self.c.bind('<ButtonPress-1>',self.start);self.c.bind('<B1-Motion>',self.drag);self.c.bind('<ButtonRelease-1>',self.end)
+ def start(self,e):
+  self.a=(e.x,e.y)
+  if self.rect:self.c.delete(self.rect)
+  self.rect=self.c.create_rectangle(e.x,e.y,e.x,e.y,outline='red',width=3)
+ def drag(self,e):
+  if self.a:self.c.coords(self.rect,self.a[0],self.a[1],e.x,e.y)
+ def end(self,e):self.b=(e.x,e.y)
+ def save(self,e=None):
+  if not self.a or not self.b:return
+  x1,x2=sorted((self.a[0],self.b[0]));y1,y2=sorted((self.a[1],self.b[1]))
+  if x2-x1<8 or y2-y1<8:return
+  p=TEMPLATE_DIR/f'{self.name}_{len(list(TEMPLATE_DIR.glob(self.name+"_*.png")))+1:03d}.png';cv2.imwrite(str(p),self.im[y1:y2,x1:x2]);rel=str(p.relative_to(APP_DIR)).replace('\\','/');self.destroy();self.cb(rel)
+class Calibration(tk.Toplevel):
+ def __init__(self,app):
+  super().__init__(app);self.app=app;self.title('Zumbi - Calibracao livre');self.geometry('820x520');self.attributes('-topmost',True);self.protocol('WM_DELETE_WINDOW',self.close);self.root=ttk.Frame(self,padding=18);self.root.pack(fill='both',expand=True)
+  ttk.Label(self.root,text='CALIBRACAO LIVRE',font=('Segoe UI',20,'bold')).pack(anchor='w');ttk.Label(self.root,text='Deixe o jogo na tela desejada. Capture qualquer item quando estiver pronto; nao existe ordem obrigatoria.').pack(anchor='w',pady=(2,16));self.rows=ttk.Frame(self.root);self.rows.pack(fill='x');self.refresh();ttk.Separator(self.root).pack(fill='x',pady=16);ttk.Label(self.root,text='A tela Invasao Zumbi e a pre-condicao. Deixe-a aberta antes de Iniciar; o bot nao navega por Eventos.',wraplength=760).pack(anchor='w');ttk.Button(self.root,text='Fechar e salvar',command=self.close).pack(anchor='e',pady=20)
+ def refresh(self):
+  for w in self.rows.winfo_children():w.destroy()
+  for n,l,k in ITEMS:
+   a=self.app.p['actions'].get(n,{});num=len(a.get('templates',[]));pos=a.get('position');st=f'{num} imagem(ns)' if num else 'Nao configurado';st+=(f" | X {pos['x']} Y {pos['y']}" if pos else '')
+   r=ttk.Frame(self.rows);r.pack(fill='x',pady=5);ttk.Label(r,text=l,width=28).pack(side='left');ttk.Label(r,text=st).pack(side='left');ttk.Button(r,text='Capturar',command=lambda n=n,l=l,k=k:self.app.capture(n,l,k,self)).pack(side='right',padx=3);ttk.Button(r,text='Testar',command=lambda n=n,l=l:self.app.test(n,l)).pack(side='right',padx=3)
+ def close(self):save_profile(self.app.p);self.app.summary();self.destroy()
+class App(tk.Tk):
+ def __init__(self):
+  super().__init__();self.title('Zumbi Product V1.1');self.geometry('800x620');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
+ def build(self):
+  r=ttk.Frame(self,padding=18);r.pack(fill='both',expand=True);ttk.Label(r,text='ZUMBI',font=('Segoe UI',24,'bold')).pack(anchor='w');self.status=ttk.Label(r,text='Parado');self.status.pack(anchor='w',pady=(0,14));b=ttk.Frame(r);b.pack(fill='x');ttk.Button(b,text='Iniciar',command=self.start_bot).pack(side='left',padx=3);ttk.Button(b,text='Pausar / Retomar',command=self.pause).pack(side='left',padx=3);ttk.Button(b,text='Parar',command=self.stop).pack(side='left',padx=3);ttk.Button(b,text='Calibrar',command=self.calibrate).pack(side='right');ttk.Separator(r).pack(fill='x',pady=12);self.sum=ttk.Frame(r);self.sum.pack(fill='x');self.summary();ttk.Label(r,text='Log',font=('Segoe UI',14,'bold')).pack(anchor='w',pady=(18,6));self.logbox=tk.Text(r,height=15,state='disabled',font=('Consolas',9));self.logbox.pack(fill='both',expand=True);ttk.Label(r,text='F8 pausa/retoma | F12 para').pack(anchor='e')
+ def summary(self):
+  for w in self.sum.winfo_children():w.destroy()
+  ttk.Label(self.sum,text='Estado da calibracao',font=('Segoe UI',14,'bold')).pack(anchor='w')
+  for n,l,k in ITEMS:ttk.Label(self.sum,text=('OK  ' if self.p['actions'].get(n,{}).get('templates') else '--  ')+l).pack(anchor='w')
+ def calibrate(self):
+  if self.running:messagebox.showwarning('Zumbi','Pare o bot antes de calibrar.');return
+  Calibration(self)
+ def capture(self,n,l,k,w):
+  w.withdraw();self.withdraw()
+  def pos(x,y):
+   self.deiconify();w.deiconify();w.lift();a=self.p['actions'].setdefault(n,{'templates':[]});a['position']={'x':x,'y':y};a['kind']=k;save_profile(self.p)
+   if messagebox.askyesno('Zumbi',f'Posicao de {l} salva. Capturar a imagem agora?'):
+    w.withdraw();self.withdraw()
+    def tpl(path):
+     self.deiconify();w.deiconify();w.lift();a['templates']=a.get('templates',[])+[path];save_profile(self.p);w.refresh();self.summary();f=match(path,float(self.p['threshold']));messagebox.showinfo('Teste',f"Imagem salva. Match: {f['score']:.1%}" if f else 'Imagem salva, mas nao foi reconhecida agora.')
+    Crop(self,n,x,y,tpl)
+   else:w.refresh();self.summary()
+  Pointer(self,'Capturar: '+l,pos)
+ def test(self,n,l):
+  a=self.p['actions'].get(n,{})
+  if not a.get('templates'):messagebox.showwarning('Teste','Capture uma imagem primeiro.');return
+  f=find(a,float(self.p['threshold']));messagebox.showinfo('Teste',f"{l}: {f['score']:.1%} em X {f['x']} Y {f['y']}" if f else f'{l} nao encontrado na tela atual.')
+ def log(self,s):self.logs.put(s)
+ def flush(self):
+  while not self.logs.empty():
+   s=self.logs.get();self.logbox.config(state='normal');self.logbox.insert('end',s+'\n');self.logbox.see('end');self.logbox.config(state='disabled')
+  self.after(100,self.flush)
+ def hotkey(self,k):
+  if k==keyboard.Key.f8:self.after(0,self.pause)
+  elif k==keyboard.Key.f12:self.after(0,self.stop)
+ def pause(self):
+  if self.running:self.paused=not self.paused;self.status.config(text='Pausado' if self.paused else 'Rodando')
+ def stop(self):self.running=False;self.paused=False;self.status.config(text='Parando...')
+ def sleep(self,s):
+  end=time.time()+s
+  while self.running and time.time()<end:
+   while self.paused and self.running:time.sleep(.1)
+   time.sleep(.05)
+ def click(self,f,l):self.log(f"CLICK {l}: {f['x']},{f['y']}");pyautogui.click(f['x'],f['y']);self.sleep(float(self.p['click_delay']))
+ def wait(self,n):
+  end=time.time()+float(self.p['timeout']);a=self.p['actions'][n]
+  while self.running and time.time()<end:
+   f=find(a,float(self.p['threshold']))
+   if f:return f
+   time.sleep(.25)
+  return None
+ def start_bot(self):
+  req=['tela_invasao','buscar','botao_atacar','botao_marchar'];missing=[n for n in req if not self.p['actions'].get(n,{}).get('templates')]
+  if missing:messagebox.showwarning('Zumbi','Falta calibrar: '+', '.join(missing));return
+  if not find(self.p['actions']['tela_invasao'],float(self.p['threshold'])):messagebox.showwarning('Zumbi','Abra a tela / aba Invasao Zumbi antes de iniciar.');return
+  self.running=True;self.paused=False;self.status.config(text='Rodando');threading.Thread(target=self.loop,daemon=True).start()
+ def loop(self):
+  marches=0
+  try:
+   while self.running:
+    nv=self.p['actions'].get('sem_vigor',{})
+    if nv.get('templates') and find(nv,float(self.p['threshold'])):self.log('Sem vigor detectado. Encerrando.');break
+    f=self.wait('buscar')
+    if not f:self.log('Buscar nao encontrado.');break
+    self.click(f,'Buscar');self.sleep(float(self.p['after_search']))
+    pop=self.p['actions'].get('popup_invasao',{})
+    if pop.get('templates') and not self.wait('popup_invasao'):self.log('Popup/alvo nao confirmado.');break
+    f=self.wait('botao_atacar')
+    if not f:self.log('Atacar nao encontrado. Possivel falta de vigor.');break
+    self.click(f,'Atacar');self.sleep(float(self.p['after_attack']));f=self.wait('botao_marchar')
+    if not f:self.log('Marchar nao encontrado.');break
+    self.click(f,'Marchar');marches+=1;self.log(f'Marcha {marches} concluida');self.sleep(float(self.p['after_march']))
+  except pyautogui.FailSafeException:self.log('FAILSAFE acionado.')
+  except Exception as e:self.log('ERRO: '+str(e))
+  finally:self.running=False;self.paused=False;self.after(0,lambda:self.status.config(text='Parado'));self.log(f'Finalizado. Marchas: {marches}')
+ def close(self):
+  self.running=False
+  try:self.listener.stop()
+  except:pass
+  self.destroy()
+if __name__=='__main__':pyautogui.FAILSAFE=True;App().mainloop()
