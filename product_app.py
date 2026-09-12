@@ -10,16 +10,8 @@ from PIL import Image, ImageTk
 APP_DIR=Path(__file__).resolve().parent
 PROFILE_PATH=APP_DIR/'profile.json'
 TEMPLATE_DIR=APP_DIR/'templates'/'user'; TEMPLATE_DIR.mkdir(parents=True,exist_ok=True)
-# Preserve the original automation semantics: fixed navigation uses a coordinate;
-# elements that are searched/validated use image templates.
-ITEMS=[
- ('tela_invasao','Tela / aba Invasao Zumbi','position'),
- ('buscar','Buscar','image'),
- ('popup_invasao','Popup / alvo encontrado','image'),
- ('botao_atacar','Atacar','image'),
- ('botao_marchar','Marchar','image'),
- ('sem_vigor','Sem vigor','image'),
-]
+ITEMS=[('tela_invasao','Tela / aba Invasao Zumbi','position'),('buscar','Buscar','image'),('popup_invasao','Popup / alvo encontrado','image'),('botao_atacar','Atacar','image'),('botao_marchar','Marchar','image'),('sem_vigor','Sem vigor','image')]
+EXAMPLES={'buscar':'templates/buscar.png','popup_invasao':'templates/popup_invasao_zumbis.png','botao_atacar':'templates/botao_atacar.png','botao_marchar':'templates/botao_marchar.png'}
 DEFAULT={'threshold':.72,'click_delay':.3,'after_search':.5,'after_attack':.7,'after_march':.7,'timeout':5.0,'actions':{}}
 def load_profile():
  d=json.loads(json.dumps(DEFAULT))
@@ -29,8 +21,7 @@ def load_profile():
  return d
 def save_profile(p):PROFILE_PATH.write_text(json.dumps(p,indent=2,ensure_ascii=False),encoding='utf-8')
 def shot():
- with mss.mss() as s:
-  m=s.monitors[1];im=np.array(s.grab(m))
+ with mss.mss() as s:m=s.monitors[1];im=np.array(s.grab(m))
  return cv2.cvtColor(im,cv2.COLOR_BGRA2BGR),m
 def match(path,threshold):
  p=Path(path);p=p if p.is_absolute() else APP_DIR/p;t=cv2.imread(str(p))
@@ -48,19 +39,12 @@ def find(a,t):
  return best
 class Pointer(tk.Toplevel):
  def __init__(self,parent,label,cb):
-  super().__init__(parent);self.cb=cb;self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.attributes('-alpha',.28);self.configure(bg='black',cursor='crosshair');self.focus_force()
-  tk.Label(self,text='CLIQUE NO LOCAL DESEJADO',bg='black',fg='white',font=('Segoe UI',28,'bold')).pack(pady=(35,5));tk.Label(self,text=f'{label}\nESC cancela',bg='black',fg='white',font=('Segoe UI',16,'bold')).pack();self.bind('<Escape>',lambda e:self.destroy());self.bind('<Button-1>',self.go)
+  super().__init__(parent);self.cb=cb;self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.attributes('-alpha',.28);self.configure(bg='black',cursor='crosshair');self.focus_force();tk.Label(self,text='CLIQUE NO LOCAL DESEJADO',bg='black',fg='white',font=('Segoe UI',28,'bold')).pack(pady=(35,5));tk.Label(self,text=f'{label}\nESC cancela',bg='black',fg='white',font=('Segoe UI',16,'bold')).pack();self.bind('<Escape>',lambda e:self.destroy());self.bind('<Button-1>',self.go)
  def go(self,e):
-  x,y=self.winfo_pointerxy();self.destroy();self.after(120,lambda:self.cb(x,y))
+  x,y=self.winfo_pointerxy();self.destroy();self.cb(x,y)
 class Crop(tk.Toplevel):
  def __init__(self,parent,name,cb):
-  super().__init__(parent);self.name=name;self.cb=cb;self.im,self.mon=shot();self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.configure(cursor='crosshair');self.c=tk.Canvas(self,highlightthickness=0);self.c.pack(fill='both',expand=True)
-  self.photo=ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(self.im,cv2.COLOR_BGR2RGB)));self.c.create_image(0,0,anchor='nw',image=self.photo)
-  # High-contrast instruction panel so the save action cannot be missed.
-  self.c.create_rectangle(0,0,self.winfo_screenwidth(),120,fill='black',outline='black')
-  self.c.create_text(self.winfo_screenwidth()//2,38,anchor='center',text='1. ARRASTE PARA MARCAR O OBJETO',fill='white',font=('Segoe UI',26,'bold'))
-  self.c.create_text(self.winfo_screenwidth()//2,82,anchor='center',text='2. PRESSIONE ENTER PARA SALVAR     |     ESC = CANCELAR',fill='white',font=('Segoe UI',20,'bold'))
-  self.a=self.b=self.rect=None;self.bind('<Escape>',lambda e:self.destroy());self.bind('<Return>',self.save);self.c.bind('<ButtonPress-1>',self.start);self.c.bind('<B1-Motion>',self.drag);self.c.bind('<ButtonRelease-1>',self.end);self.focus_force()
+  super().__init__(parent);self.name=name;self.cb=cb;self.im,self.mon=shot();self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.configure(cursor='crosshair');self.c=tk.Canvas(self,highlightthickness=0);self.c.pack(fill='both',expand=True);self.photo=ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(self.im,cv2.COLOR_BGR2RGB)));self.c.create_image(0,0,anchor='nw',image=self.photo);self.c.create_rectangle(0,0,self.winfo_screenwidth(),120,fill='black',outline='black');self.c.create_text(self.winfo_screenwidth()//2,38,text='1. ARRASTE PARA MARCAR O OBJETO',fill='white',font=('Segoe UI',26,'bold'));self.c.create_text(self.winfo_screenwidth()//2,82,text='2. PRESSIONE ENTER PARA SALVAR     |     ESC = CANCELAR',fill='white',font=('Segoe UI',20,'bold'));self.a=self.b=self.rect=None;self.bind('<Escape>',lambda e:self.destroy());self.bind('<Return>',self.save);self.c.bind('<ButtonPress-1>',self.start);self.c.bind('<B1-Motion>',self.drag);self.c.bind('<ButtonRelease-1>',self.end);self.focus_force()
  def start(self,e):
   self.a=(e.x,e.y)
   if self.rect:self.c.delete(self.rect)
@@ -72,27 +56,35 @@ class Crop(tk.Toplevel):
   if not self.a or not self.b:return
   x1,x2=sorted((self.a[0],self.b[0]));y1,y2=sorted((self.a[1],self.b[1]))
   if x2-x1<8 or y2-y1<8:return
-  p=TEMPLATE_DIR/f'{self.name}_{len(list(TEMPLATE_DIR.glob(self.name+"_*.png")))+1:03d}.png';cv2.imwrite(str(p),self.im[y1:y2,x1:x2]);rel=str(p.relative_to(APP_DIR)).replace('\\','/');self.destroy();self.cb(rel)
+  p=TEMPLATE_DIR/f'{self.name}_{len(list(TEMPLATE_DIR.glob(self.name+"_*.png")))+1:03d}.png';cv2.imwrite(str(p),self.im[y1:y2,x1:x2]);self.destroy();self.cb(str(p.relative_to(APP_DIR)).replace('\\','/'))
 class Calibration(tk.Toplevel):
  def __init__(self,app):
-  super().__init__(app);self.app=app;self.title('Zumbi - Calibracao livre');self.geometry('850x530');self.attributes('-topmost',True);self.protocol('WM_DELETE_WINDOW',self.close);self.root=ttk.Frame(self,padding=18);self.root.pack(fill='both',expand=True)
-  ttk.Label(self.root,text='CALIBRACAO LIVRE',font=('Segoe UI',20,'bold')).pack(anchor='w');ttk.Label(self.root,text='Deixe o jogo na tela desejada e capture o item quando estiver pronto. Cada item usa apenas o tipo necessario.').pack(anchor='w',pady=(2,16));self.rows=ttk.Frame(self.root);self.rows.pack(fill='x');self.refresh();ttk.Separator(self.root).pack(fill='x',pady=16);ttk.Label(self.root,text='Tela Invasao Zumbi = coordenada de referencia. Buscar / Popup / Atacar / Marchar / Sem vigor = reconhecimento por imagem.',wraplength=790).pack(anchor='w');ttk.Button(self.root,text='Fechar e salvar',command=self.close).pack(anchor='e',pady=20)
+  super().__init__(app);self.app=app;self.title('Zumbi - Calibracao livre');self.geometry('930x570');self.attributes('-topmost',True);self.protocol('WM_DELETE_WINDOW',self.close);self.photos=[];self.root=ttk.Frame(self,padding=18);self.root.pack(fill='both',expand=True);ttk.Label(self.root,text='CALIBRACAO LIVRE',font=('Segoe UI',20,'bold')).pack(anchor='w');ttk.Label(self.root,text='Deixe o jogo na tela desejada. Para imagens, use o exemplo como guia do que deve entrar no recorte.').pack(anchor='w',pady=(2,14));self.rows=ttk.Frame(self.root);self.rows.pack(fill='x');self.refresh();ttk.Separator(self.root).pack(fill='x',pady=14);ttk.Label(self.root,text='Os exemplos sao os templates reais do bot original. Sem vigor ainda nao possui exemplo original e deve ser capturado quando aparecer.',wraplength=870).pack(anchor='w');ttk.Button(self.root,text='Fechar e salvar',command=self.close).pack(anchor='e',pady=16)
+ def thumb(self,n):
+  rel=EXAMPLES.get(n)
+  if not rel:return None
+  p=APP_DIR/rel
+  if not p.exists():return None
+  im=Image.open(p);im.thumbnail((105,48));ph=ImageTk.PhotoImage(im);self.photos.append(ph);return ph
  def refresh(self):
   for w in self.rows.winfo_children():w.destroy()
+  self.photos=[]
   for n,l,k in ITEMS:
    a=self.app.p['actions'].get(n,{});pos=a.get('position');num=len(a.get('templates',[]));ok=bool(pos) if k=='position' else bool(num);st='Nao configurado'
-   if k=='position' and pos:st=f"Coordenada: X {pos['x']} Y {pos['y']}"
+   if k=='position' and pos:st=f"X {pos['x']} Y {pos['y']}"
    elif k=='image' and num:st=f'{num} imagem(ns)'
-   r=ttk.Frame(self.rows);r.pack(fill='x',pady=5);ttk.Label(r,text=l,width=28).pack(side='left');ttk.Label(r,text=('OK | ' if ok else '')+st).pack(side='left');ttk.Label(r,text='COORDENADA' if k=='position' else 'IMAGEM',width=12).pack(side='right',padx=5);ttk.Button(r,text='Capturar',command=lambda n=n,l=l,k=k:self.app.capture(n,l,k,self)).pack(side='right',padx=3);ttk.Button(r,text='Testar',command=lambda n=n,l=l,k=k:self.app.test(n,l,k)).pack(side='right',padx=3)
+   r=ttk.Frame(self.rows);r.pack(fill='x',pady=5);ttk.Label(r,text=l,width=25).pack(side='left');ph=self.thumb(n)
+   if ph:ttk.Label(r,image=ph).pack(side='left',padx=(3,10))
+   else:ttk.Label(r,text='(sem exemplo)',width=16).pack(side='left',padx=(3,10))
+   ttk.Label(r,text=('OK | ' if ok else '')+st,width=22).pack(side='left');ttk.Button(r,text='Capturar',command=lambda n=n,l=l,k=k:self.app.capture(n,l,k,self)).pack(side='right',padx=3);ttk.Button(r,text='Testar',command=lambda n=n,l=l,k=k:self.app.test(n,l,k)).pack(side='right',padx=3)
  def close(self):save_profile(self.app.p);self.app.summary();self.destroy()
 class App(tk.Tk):
  def __init__(self):
-  super().__init__();self.title('Zumbi Product V1.2');self.geometry('820x620');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
+  super().__init__();self.title('Zumbi Product V1.3');self.geometry('820x620');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
  def build(self):
   r=ttk.Frame(self,padding=18);r.pack(fill='both',expand=True);ttk.Label(r,text='ZUMBI',font=('Segoe UI',24,'bold')).pack(anchor='w');self.status=ttk.Label(r,text='Parado');self.status.pack(anchor='w',pady=(0,14));b=ttk.Frame(r);b.pack(fill='x');ttk.Button(b,text='Iniciar',command=self.start_bot).pack(side='left',padx=3);ttk.Button(b,text='Pausar / Retomar',command=self.pause).pack(side='left',padx=3);ttk.Button(b,text='Parar',command=self.stop).pack(side='left',padx=3);ttk.Button(b,text='Calibrar',command=self.calibrate).pack(side='right');ttk.Separator(r).pack(fill='x',pady=12);self.sum=ttk.Frame(r);self.sum.pack(fill='x');self.summary();ttk.Label(r,text='Log',font=('Segoe UI',14,'bold')).pack(anchor='w',pady=(18,6));self.logbox=tk.Text(r,height=15,state='disabled',font=('Consolas',9));self.logbox.pack(fill='both',expand=True);ttk.Label(r,text='F8 pausa/retoma | F12 para').pack(anchor='e')
  def configured(self,n,k):
-  a=self.p['actions'].get(n,{})
-  return bool(a.get('position')) if k=='position' else bool(a.get('templates'))
+  a=self.p['actions'].get(n,{});return bool(a.get('position')) if k=='position' else bool(a.get('templates'))
  def summary(self):
   for w in self.sum.winfo_children():w.destroy()
   ttk.Label(self.sum,text='Estado da calibracao',font=('Segoe UI',14,'bold')).pack(anchor='w')
@@ -100,8 +92,7 @@ class App(tk.Tk):
  def calibrate(self):
   if self.running:messagebox.showwarning('Zumbi','Pare o bot antes de calibrar.');return
   Calibration(self)
- def restore(self,w):
-  self.deiconify();self.lift();w.deiconify();w.lift();w.attributes('-topmost',True);w.focus_force()
+ def restore(self,w):self.deiconify();self.lift();w.deiconify();w.lift();w.attributes('-topmost',True);w.focus_force()
  def capture(self,n,l,k,w):
   w.withdraw();self.withdraw();self.update_idletasks()
   if k=='position':
@@ -109,7 +100,6 @@ class App(tk.Tk):
     a=self.p['actions'].setdefault(n,{});a.clear();a['mode']='position';a['position']={'x':x,'y':y};save_profile(self.p);self.restore(w);w.refresh();self.summary()
    Pointer(self,'Capturar: '+l,done)
   else:
-   # No intermediate dialog: capture goes directly to the visual crop screen.
    def done(path):
     a=self.p['actions'].setdefault(n,{});a['mode']='image';a.pop('position',None);a['templates']=a.get('templates',[])+[path];save_profile(self.p);self.restore(w);w.refresh();self.summary();f=match(path,float(self.p['threshold']));messagebox.showinfo('Teste',f"Imagem salva. Match: {f['score']:.1%}" if f else 'Imagem salva. Nao foi reconhecida na tela atual.',parent=w)
    self.after(180,lambda:Crop(self,n,done))
@@ -144,8 +134,6 @@ class App(tk.Tk):
    time.sleep(.25)
   return None
  def start_bot(self):
-  # The user leaves the game on Invasao Zumbi. This coordinate is stored for calibration/reference;
-  # the repeated cycle itself starts at Buscar, preserving the intended new flow.
   req=[('tela_invasao','position'),('buscar','image'),('botao_atacar','image'),('botao_marchar','image')];missing=[n for n,k in req if not self.configured(n,k)]
   if missing:messagebox.showwarning('Zumbi','Falta calibrar: '+', '.join(missing));return
   if self.running:return
