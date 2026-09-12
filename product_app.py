@@ -38,12 +38,14 @@ def find(a,t):
   if f and (best is None or f['score']>best['score']):best=f
  return best
 class Pointer(tk.Toplevel):
- def __init__(self,parent,label,cb):
-  super().__init__(parent);self.cb=cb;self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.attributes('-alpha',.28);self.configure(bg='black',cursor='crosshair');self.focus_force();tk.Label(self,text='CLIQUE NO LOCAL DESEJADO',bg='black',fg='white',font=('Segoe UI',28,'bold')).pack(pady=(35,5));tk.Label(self,text=f'{label}\nESC cancela',bg='black',fg='white',font=('Segoe UI',16,'bold')).pack();self.bind('<Escape>',lambda e:self.destroy());self.bind('<Button-1>',self.go)
+ def __init__(self,parent,label,cb,cancel):
+  super().__init__(parent);self.cb=cb;self.cancel_cb=cancel;self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.attributes('-alpha',.28);self.configure(bg='black',cursor='crosshair');self.focus_force();tk.Label(self,text='CLIQUE NO LOCAL DESEJADO',bg='black',fg='white',font=('Segoe UI',28,'bold')).pack(pady=(35,5));tk.Label(self,text=f'{label}\nESC cancela e volta para a calibracao',bg='black',fg='white',font=('Segoe UI',16,'bold')).pack();self.bind('<Escape>',self.cancel);self.bind('<Button-1>',self.go)
+ def cancel(self,e=None):self.destroy();self.cancel_cb()
  def go(self,e):x,y=self.winfo_pointerxy();self.destroy();self.cb(x,y)
 class Crop(tk.Toplevel):
- def __init__(self,parent,name,cb):
-  super().__init__(parent);self.name=name;self.cb=cb;self.im,self.mon=shot();self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.configure(cursor='crosshair');self.c=tk.Canvas(self,highlightthickness=0);self.c.pack(fill='both',expand=True);self.photo=ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(self.im,cv2.COLOR_BGR2RGB)));self.c.create_image(0,0,anchor='nw',image=self.photo);self.c.create_rectangle(0,0,self.winfo_screenwidth(),120,fill='black',outline='black');self.c.create_text(self.winfo_screenwidth()//2,38,text='1. ARRASTE PARA MARCAR O OBJETO',fill='white',font=('Segoe UI',26,'bold'));self.c.create_text(self.winfo_screenwidth()//2,82,text='2. PRESSIONE ENTER PARA SALVAR     |     ESC = CANCELAR',fill='white',font=('Segoe UI',20,'bold'));self.a=self.b=self.rect=None;self.bind('<Escape>',lambda e:self.destroy());self.bind('<Return>',self.save);self.c.bind('<ButtonPress-1>',self.start);self.c.bind('<B1-Motion>',self.drag);self.c.bind('<ButtonRelease-1>',self.end);self.focus_force()
+ def __init__(self,parent,name,cb,cancel):
+  super().__init__(parent);self.name=name;self.cb=cb;self.cancel_cb=cancel;self.im,self.mon=shot();self.attributes('-fullscreen',True);self.attributes('-topmost',True);self.configure(cursor='crosshair');self.c=tk.Canvas(self,highlightthickness=0);self.c.pack(fill='both',expand=True);self.photo=ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(self.im,cv2.COLOR_BGR2RGB)));self.c.create_image(0,0,anchor='nw',image=self.photo);self.c.create_rectangle(0,0,self.winfo_screenwidth(),120,fill='black',outline='black');self.c.create_text(self.winfo_screenwidth()//2,38,text='1. ARRASTE PARA MARCAR O OBJETO',fill='white',font=('Segoe UI',26,'bold'));self.c.create_text(self.winfo_screenwidth()//2,82,text='2. ENTER = SALVAR     |     ESC = CANCELAR E VOLTAR',fill='white',font=('Segoe UI',20,'bold'));self.a=self.b=self.rect=None;self.bind('<Escape>',self.cancel);self.bind('<Return>',self.save);self.c.bind('<ButtonPress-1>',self.start);self.c.bind('<B1-Motion>',self.drag);self.c.bind('<ButtonRelease-1>',self.end);self.focus_force()
+ def cancel(self,e=None):self.destroy();self.cancel_cb()
  def start(self,e):
   self.a=(e.x,e.y)
   if self.rect:self.c.delete(self.rect)
@@ -79,7 +81,7 @@ class Calibration(tk.Toplevel):
  def close(self):save_profile(self.app.p);self.app.summary();self.destroy()
 class App(tk.Tk):
  def __init__(self):
-  super().__init__();self.title('Zumbi Product V1.5 Final');self.geometry('820x580');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
+  super().__init__();self.title('Zumbi Product V1.6 Final');self.geometry('820x580');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
  def build(self):
   r=ttk.Frame(self,padding=18);r.pack(fill='both',expand=True);ttk.Label(r,text='ZUMBI',font=('Segoe UI',24,'bold')).pack(anchor='w');self.status=ttk.Label(r,text='Parado');self.status.pack(anchor='w',pady=(0,14));b=ttk.Frame(r);b.pack(fill='x');ttk.Button(b,text='Iniciar',command=self.start_bot).pack(side='left',padx=3);ttk.Button(b,text='Pausar / Retomar',command=self.pause).pack(side='left',padx=3);ttk.Button(b,text='Parar',command=self.stop).pack(side='left',padx=3);ttk.Button(b,text='Calibrar',command=self.calibrate).pack(side='right');ttk.Separator(r).pack(fill='x',pady=12);self.sum=ttk.Frame(r);self.sum.pack(fill='x');self.summary();ttk.Label(r,text='Log',font=('Segoe UI',14,'bold')).pack(anchor='w',pady=(18,6));self.logbox=tk.Text(r,height=15,state='disabled',font=('Consolas',9));self.logbox.pack(fill='both',expand=True);ttk.Label(r,text='F8 pausa/retoma | F12 para').pack(anchor='e')
  def configured(self,n,k):
@@ -94,14 +96,15 @@ class App(tk.Tk):
  def restore(self,w):self.deiconify();self.lift();w.deiconify();w.lift();w.attributes('-topmost',True);w.focus_force()
  def capture(self,n,l,k,w):
   w.withdraw();self.withdraw();self.update_idletasks()
+  cancel=lambda:self.restore(w)
   if k=='position':
    def done(x,y):
     a=self.p['actions'].setdefault(n,{});a.clear();a['mode']='position';a['position']={'x':x,'y':y};save_profile(self.p);self.restore(w);w.refresh();self.summary()
-   Pointer(self,'Capturar: '+l,done)
+   Pointer(self,'Capturar: '+l,done,cancel)
   else:
    def done(path):
     a=self.p['actions'].setdefault(n,{});a['mode']='image';a.pop('position',None);a['templates']=a.get('templates',[])+[path];save_profile(self.p);self.restore(w);w.refresh();self.summary();f=match(path,float(self.p['threshold']));messagebox.showinfo('Teste',f"Imagem salva. Match: {f['score']:.1%}" if f else 'Imagem salva. Nao foi reconhecida na tela atual.',parent=w)
-   self.after(180,lambda:Crop(self,n,done))
+   self.after(180,lambda:Crop(self,n,done,cancel))
  def test(self,n,l,k):
   a=self.p['actions'].get(n,{})
   if k=='position':
@@ -126,8 +129,7 @@ class App(tk.Tk):
    time.sleep(.05)
  def click_xy(self,pos,l):self.log(f"CLICK {l}: {pos['x']},{pos['y']}");pyautogui.click(pos['x'],pos['y']);self.sleep(float(self.p['click_delay']))
  def click(self,f,l):self.click_xy(f,l)
- def press_esc_retry(self,reason):
-  self.log(reason+' ESC e novo ciclo.');pyautogui.press('esc');self.sleep(float(self.p.get('after_esc',1.2)));self.sleep(float(self.p.get('retry_wait',3.0)))
+ def press_esc_retry(self,reason):self.log(reason+' ESC e novo ciclo.');pyautogui.press('esc');self.sleep(float(self.p.get('after_esc',1.2)));self.sleep(float(self.p.get('retry_wait',3.0)))
  def wait(self,n):
   end=time.time()+float(self.p['timeout']);a=self.p['actions'][n]
   while self.running and time.time()<end:
@@ -149,12 +151,10 @@ class App(tk.Tk):
     if not f:self.press_esc_retry('Buscar nao encontrado.');continue
     self.click(f,'Buscar');self.sleep(float(self.p['after_search']))
     f=self.wait('botao_atacar')
-    if not f:
-     self.press_esc_retry('Atacar nao encontrado; tropas podem estar ocupadas.');continue
+    if not f:self.press_esc_retry('Atacar nao encontrado; tropas podem estar ocupadas.');continue
     self.click(f,'Atacar');self.sleep(float(self.p['after_attack']))
     f=self.wait('botao_marchar')
-    if not f:
-     self.press_esc_retry('Marchar nao encontrado; tentando novamente.');continue
+    if not f:self.press_esc_retry('Marchar nao encontrado; tentando novamente.');continue
     self.click(f,'Marchar');marches+=1;self.log(f'Marcha {marches} concluida');self.sleep(float(self.p['after_march']))
   except pyautogui.FailSafeException:self.log('FAILSAFE acionado.')
   except Exception as e:self.log('ERRO: '+str(e))
