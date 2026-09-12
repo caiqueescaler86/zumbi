@@ -12,7 +12,7 @@ PROFILE_PATH=APP_DIR/'profile.json'
 TEMPLATE_DIR=APP_DIR/'templates'/'user'; TEMPLATE_DIR.mkdir(parents=True,exist_ok=True)
 ITEMS=[('eventos','Eventos','position'),('buscar','Buscar','image'),('botao_atacar','Atacar','image'),('botao_marchar','Marchar','image')]
 EXAMPLES={'buscar':'templates/buscar.png','botao_atacar':'templates/botao_atacar.png','botao_marchar':'templates/botao_marchar.png'}
-DEFAULT={'threshold':.72,'click_delay':.3,'after_eventos':.7,'after_search':.5,'after_attack':.7,'after_march':.7,'after_esc':1.2,'retry_wait':3.0,'timeout':5.0,'actions':{}}
+DEFAULT={'threshold':.72,'click_delay':.3,'after_eventos':.7,'after_search':.5,'after_attack':.7,'after_march':.7,'after_esc':1.2,'retry_wait':3.0,'timeout':5.0,'timer_ativo_minutos':30,'timer_pausa_minutos':30,'actions':{}}
 def load_profile():
  d=json.loads(json.dumps(DEFAULT))
  if PROFILE_PATH.exists():
@@ -60,7 +60,7 @@ class Crop(tk.Toplevel):
   p=TEMPLATE_DIR/f'{self.name}_{len(list(TEMPLATE_DIR.glob(self.name+"_*.png")))+1:03d}.png';cv2.imwrite(str(p),self.im[y1:y2,x1:x2]);self.destroy();self.cb(str(p.relative_to(APP_DIR)).replace('\\','/'))
 class Calibration(tk.Toplevel):
  def __init__(self,app):
-  super().__init__(app);self.app=app;self.title('Zumbi - Calibracao');self.geometry('930x470');self.attributes('-topmost',True);self.protocol('WM_DELETE_WINDOW',self.close);self.photos=[];self.root=ttk.Frame(self,padding=18);self.root.pack(fill='both',expand=True);ttk.Label(self.root,text='CALIBRACAO',font=('Segoe UI',20,'bold')).pack(anchor='w');ttk.Label(self.root,text='Deixe o jogo na tela desejada. Para imagens, use o exemplo como guia do que deve entrar no recorte.').pack(anchor='w',pady=(2,14));self.rows=ttk.Frame(self.root);self.rows.pack(fill='x');self.refresh();ttk.Separator(self.root).pack(fill='x',pady=14);ttk.Label(self.root,text='Eventos usa coordenada. Buscar, Atacar e Marchar usam reconhecimento por imagem.').pack(anchor='w');ttk.Button(self.root,text='Fechar e salvar',command=self.close).pack(anchor='e',pady=16)
+  super().__init__(app);self.app=app;self.title('Zumbi - Configuracao');self.geometry('930x560');self.attributes('-topmost',True);self.protocol('WM_DELETE_WINDOW',self.close);self.photos=[];self.root=ttk.Frame(self,padding=18);self.root.pack(fill='both',expand=True);ttk.Label(self.root,text='CONFIGURACAO',font=('Segoe UI',20,'bold')).pack(anchor='w');ttk.Label(self.root,text='Deixe o jogo na tela desejada. Para imagens, use o exemplo como guia do que deve entrar no recorte.').pack(anchor='w',pady=(2,14));self.rows=ttk.Frame(self.root);self.rows.pack(fill='x');self.refresh();ttk.Separator(self.root).pack(fill='x',pady=14);timer=ttk.LabelFrame(self.root,text='Ciclo de funcionamento',padding=10);timer.pack(fill='x');self.ativo=tk.StringVar(value=str(self.app.p.get('timer_ativo_minutos',30)));self.pausa=tk.StringVar(value=str(self.app.p.get('timer_pausa_minutos',30)));ttk.Label(timer,text='Tempo ativo (min):').grid(row=0,column=0,sticky='w',padx=(0,6));ttk.Entry(timer,textvariable=self.ativo,width=8).grid(row=0,column=1,sticky='w');ttk.Label(timer,text='Tempo em descanso (min):').grid(row=0,column=2,sticky='w',padx=(24,6));ttk.Entry(timer,textvariable=self.pausa,width=8).grid(row=0,column=3,sticky='w');ttk.Label(self.root,text='Eventos usa coordenada. Buscar, Atacar e Marchar usam reconhecimento por imagem.').pack(anchor='w',pady=(12,0));ttk.Button(self.root,text='Fechar e salvar',command=self.close).pack(anchor='e',pady=14)
  def thumb(self,n):
   rel=EXAMPLES.get(n)
   if not rel:return None
@@ -78,25 +78,31 @@ class Calibration(tk.Toplevel):
    if ph:ttk.Label(r,image=ph).pack(side='left',padx=(3,10))
    else:ttk.Label(r,text='(coordenada)',width=16).pack(side='left',padx=(3,10))
    ttk.Label(r,text=('OK | ' if ok else '')+st,width=22).pack(side='left');ttk.Button(r,text='Capturar',command=lambda n=n,l=l,k=k:self.app.capture(n,l,k,self)).pack(side='right',padx=3);ttk.Button(r,text='Testar',command=lambda n=n,l=l,k=k:self.app.test(n,l,k)).pack(side='right',padx=3)
- def close(self):save_profile(self.app.p);self.app.summary();self.destroy()
+ def close(self):
+  try:
+   ativo=float(self.ativo.get().replace(',','.'));pausa=float(self.pausa.get().replace(',','.'))
+   if ativo<=0 or pausa<0:raise ValueError
+  except ValueError:
+   messagebox.showwarning('Zumbi','Informe tempos validos. Tempo ativo deve ser maior que 0 e descanso pode ser 0.',parent=self);return
+  self.app.p['timer_ativo_minutos']=ativo;self.app.p['timer_pausa_minutos']=pausa;save_profile(self.app.p);self.app.summary();self.destroy()
 class App(tk.Tk):
  def __init__(self):
-  super().__init__();self.title('Zumbi Product V1.6 Final');self.geometry('820x580');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
+  super().__init__();self.title('Zumbi Product V1.7 Final');self.geometry('820x580');self.p=load_profile();self.running=False;self.paused=False;self.logs=queue.Queue();self.protocol('WM_DELETE_WINDOW',self.close);self.build();self.after(100,self.flush);self.listener=keyboard.Listener(on_press=self.hotkey);self.listener.start()
  def build(self):
-  r=ttk.Frame(self,padding=18);r.pack(fill='both',expand=True);ttk.Label(r,text='ZUMBI',font=('Segoe UI',24,'bold')).pack(anchor='w');self.status=ttk.Label(r,text='Parado');self.status.pack(anchor='w',pady=(0,14));b=ttk.Frame(r);b.pack(fill='x');ttk.Button(b,text='Iniciar',command=self.start_bot).pack(side='left',padx=3);ttk.Button(b,text='Pausar / Retomar',command=self.pause).pack(side='left',padx=3);ttk.Button(b,text='Parar',command=self.stop).pack(side='left',padx=3);ttk.Button(b,text='Calibrar',command=self.calibrate).pack(side='right');ttk.Separator(r).pack(fill='x',pady=12);self.sum=ttk.Frame(r);self.sum.pack(fill='x');self.summary();ttk.Label(r,text='Log',font=('Segoe UI',14,'bold')).pack(anchor='w',pady=(18,6));self.logbox=tk.Text(r,height=15,state='disabled',font=('Consolas',9));self.logbox.pack(fill='both',expand=True);ttk.Label(r,text='F8 pausa/retoma | F12 para').pack(anchor='e')
+  r=ttk.Frame(self,padding=18);r.pack(fill='both',expand=True);ttk.Label(r,text='ZUMBI',font=('Segoe UI',24,'bold')).pack(anchor='w');self.status=ttk.Label(r,text='Parado');self.status.pack(anchor='w',pady=(0,14));b=ttk.Frame(r);b.pack(fill='x');ttk.Button(b,text='Iniciar',command=self.start_bot).pack(side='left',padx=3);ttk.Button(b,text='Pausar / Retomar',command=self.pause).pack(side='left',padx=3);ttk.Button(b,text='Parar',command=self.stop).pack(side='left',padx=3);ttk.Button(b,text='Configurar',command=self.calibrate).pack(side='right');ttk.Separator(r).pack(fill='x',pady=12);self.sum=ttk.Frame(r);self.sum.pack(fill='x');self.summary();ttk.Label(r,text='Log',font=('Segoe UI',14,'bold')).pack(anchor='w',pady=(18,6));self.logbox=tk.Text(r,height=15,state='disabled',font=('Consolas',9));self.logbox.pack(fill='both',expand=True);ttk.Label(r,text='F8 pausa/retoma | F12 para').pack(anchor='e')
  def configured(self,n,k):
   a=self.p['actions'].get(n,{});return bool(a.get('position')) if k=='position' else bool(a.get('templates'))
  def summary(self):
   for w in self.sum.winfo_children():w.destroy()
-  ttk.Label(self.sum,text='Estado da calibracao',font=('Segoe UI',14,'bold')).pack(anchor='w')
+  ttk.Label(self.sum,text='Estado da configuracao',font=('Segoe UI',14,'bold')).pack(anchor='w')
   for n,l,k in ITEMS:ttk.Label(self.sum,text=('OK  ' if self.configured(n,k) else '--  ')+l+'  ['+('coordenada' if k=='position' else 'imagem')+']').pack(anchor='w')
+  ttk.Label(self.sum,text=f"Ciclo: {self.p.get('timer_ativo_minutos',30):g} min ativo / {self.p.get('timer_pausa_minutos',30):g} min descanso").pack(anchor='w',pady=(5,0))
  def calibrate(self):
-  if self.running:messagebox.showwarning('Zumbi','Pare o bot antes de calibrar.');return
+  if self.running:messagebox.showwarning('Zumbi','Pare o bot antes de configurar.');return
   Calibration(self)
  def restore(self,w):self.deiconify();self.lift();w.deiconify();w.lift();w.attributes('-topmost',True);w.focus_force()
  def capture(self,n,l,k,w):
-  w.withdraw();self.withdraw();self.update_idletasks()
-  cancel=lambda:self.restore(w)
+  w.withdraw();self.withdraw();self.update_idletasks();cancel=lambda:self.restore(w)
   if k=='position':
    def done(x,y):
     a=self.p['actions'].setdefault(n,{});a.clear();a['mode']='position';a['position']={'x':x,'y':y};save_profile(self.p);self.restore(w);w.refresh();self.summary()
@@ -127,6 +133,12 @@ class App(tk.Tk):
   while self.running and time.time()<end:
    while self.paused and self.running:time.sleep(.1)
    time.sleep(.05)
+ def rest(self,s):
+  end=time.time()+s;self.after(0,lambda:self.status.config(text='Descansando'))
+  while self.running and time.time()<end:
+   while self.paused and self.running:time.sleep(.1)
+   time.sleep(.1)
+  if self.running:self.after(0,lambda:self.status.config(text='Rodando'))
  def click_xy(self,pos,l):self.log(f"CLICK {l}: {pos['x']},{pos['y']}");pyautogui.click(pos['x'],pos['y']);self.sleep(float(self.p['click_delay']))
  def click(self,f,l):self.click_xy(f,l)
  def press_esc_retry(self,reason):self.log(reason+' ESC e novo ciclo.');pyautogui.press('esc');self.sleep(float(self.p.get('after_esc',1.2)));self.sleep(float(self.p.get('retry_wait',3.0)))
@@ -139,13 +151,19 @@ class App(tk.Tk):
   return None
  def start_bot(self):
   missing=[n for n,k in ITEMS if not self.configured(n,k)]
-  if missing:messagebox.showwarning('Zumbi','Falta calibrar: '+', '.join(missing));return
+  if missing:messagebox.showwarning('Zumbi','Falta configurar: '+', '.join(missing));return
   if self.running:return
   self.running=True;self.paused=False;self.status.config(text='Rodando');threading.Thread(target=self.loop,daemon=True).start()
  def loop(self):
-  marches=0
+  marches=0;active_start=time.time();active_seconds=float(self.p.get('timer_ativo_minutos',30))*60;rest_seconds=float(self.p.get('timer_pausa_minutos',30))*60
   try:
    while self.running:
+    if time.time()-active_start>=active_seconds:
+     self.log(f"Tempo ativo concluido. Descansando por {self.p.get('timer_pausa_minutos',30):g} min.")
+     if rest_seconds>0:self.rest(rest_seconds)
+     active_start=time.time()
+     if not self.running:break
+     self.log('Descanso concluido. Retomando.')
     self.click_xy(self.p['actions']['eventos']['position'],'Eventos');self.sleep(float(self.p['after_eventos']))
     f=self.wait('buscar')
     if not f:self.press_esc_retry('Buscar nao encontrado.');continue
